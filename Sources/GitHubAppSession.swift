@@ -38,10 +38,11 @@ final class GitHubAppSession: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
     func logout() { token="";expires = .distantPast;refreshToken="";refreshExpires = .distantPast;sessionSaved=false;vault.clear() }
     private func request(_ url:URL, method:String="GET", body:Data?=nil, authenticated:Bool=false) throws -> Data {
-        var request=URLRequest(url:url);request.httpMethod=method;request.httpBody=body;request.timeoutInterval=25
+        var request=URLRequest(url:url,cachePolicy:.reloadIgnoringLocalCacheData);request.httpMethod=method;request.httpBody=body;request.timeoutInterval=25
         request.setValue("application/json",forHTTPHeaderField:"Accept")
         request.setValue("application/json",forHTTPHeaderField:"Content-Type")
         request.setValue("LeetCode-Team",forHTTPHeaderField:"User-Agent")
+        request.setValue("no-cache",forHTTPHeaderField:"Cache-Control")
         if authenticated {
             try renewIfNeeded()
             guard !token.isEmpty,Date()<expires else {throw TeamError(message:"请登录 LeetCode-Team 的专用 GitHub App。会话过期后需重新授权。",status:401)}

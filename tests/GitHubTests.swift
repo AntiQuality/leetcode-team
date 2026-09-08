@@ -46,7 +46,7 @@ import Foundation
         rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:progress,confirmedPreviousUsername:"lc")}
         files["members/alice.json"]?["username"]="lc";writes.removeLast()
         conflict=true
-        rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:["username":"lc","solved":[String]()])}
+        rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum","new-question"],progress:["username":"lc","solved":["new-question"]])}
         precondition(writes.count == 1);conflict=false
         files["members/bob.json"]=["schemaVersion":1,"studyPlan":"top-100-liked","github":"alice","username":"b","solved":[String](),"updated":0]
         rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"])}
@@ -64,6 +64,33 @@ import Foundation
         files[".leetcode-team.json"]=["schemaVersion":9,"studyPlan":"different"]
         rejected {_ = try github.create("leetcode-team-sync",login:"host")}
         precondition(writes.count == written+1)
+        // A concurrent client completes another question between GET and PUT.
+        var revision="old", attempts=0, remoteSolved=["two-sum"], alwaysConflict=false
+        let racing=GitHubTeam { args,input in
+            let endpoint=args[3]
+            if endpoint == "repos/host/leetcode-team-sync" {return try data(["private":true,"permissions":["push":true]])}
+            if endpoint.hasSuffix("/contents/members") {return try data([["name":"alice.json"]])}
+            if endpoint.hasSuffix("/.leetcode-team.json") {return try data(["content":try data(["schemaVersion":1,"studyPlan":"top-100-liked"]).base64EncodedString(),"sha":"marker"])}
+            if let input=input {
+                attempts += 1
+                if attempts == 1 || alwaysConflict {revision="fresh";remoteSolved=["two-sum","remote-question"];throw TeamError(message:"racing writer",status:409)}
+                let request=try JSONSerialization.jsonObject(with:input) as! [String:Any]
+                precondition(request["sha"] as? String == "fresh")
+                let updated=try JSONSerialization.jsonObject(with:Data(base64Encoded:request["content"] as! String)!) as! [String:Any]
+                remoteSolved=updated["solved"] as! [String]
+                return try data(["ok":true])
+            }
+            return try data(["content":try data(["schemaVersion":1,"studyPlan":"top-100-liked","github":"alice","username":"lc","solved":remoteSolved,"updated":0]).base64EncodedString(),"sha":revision])
+        }
+        let raceCatalog:Set<String>=["two-sum","remote-question","local-question"]
+        let local:[String:Any]=["username":"lc","solved":["local-question"]]
+        _ = try racing.snapshot("host/leetcode-team-sync",login:"alice",catalog:raceCatalog,progress:local)
+        precondition(attempts == 2 && Set(remoteSolved)==raceCatalog)
+        _ = try racing.snapshot("host/leetcode-team-sync",login:"alice",catalog:raceCatalog,progress:local)
+        precondition(attempts == 2,"Old local progress must not erase remote completions")
+        alwaysConflict=true;attempts=0;remoteSolved=["two-sum"]
+        rejected {_ = try racing.snapshot("host/leetcode-team-sync",login:"alice",catalog:raceCatalog,progress:local)}
+        precondition(attempts == 3,"Conflict retries must be bounded")
         print("GitHub checks passed: creation retry and incompatible marker protection, create, missing member directory, write permission, private repository, paths, per-user file, no-op, account switch, conflict and malformed member.")
     }
 }

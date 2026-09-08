@@ -79,6 +79,15 @@ final class GitHubTeam {
         return repo
     }
     func snapshot(_ repo: String, login: String, catalog: Set<String>, progress: [String: Any]? = nil, confirmedPreviousUsername: String? = nil) throws -> [String: Any] {
+        for attempt in 0..<3 {
+            do {return try snapshotAttempt(repo,login:login,catalog:catalog,progress:progress,confirmedPreviousUsername:confirmedPreviousUsername)}
+            catch let error as TeamError where error.status == 409 {
+                if attempt == 2 {throw TeamError(message:"仓库仍在被其他客户端更新，已保留原记录；请关闭重复打开的旧版客户端后同步。",status:409)}
+            }
+        }
+        throw TeamError(message:"同步重试已结束")
+    }
+    private func snapshotAttempt(_ repo:String, login:String, catalog:Set<String>, progress:[String:Any]?, confirmedPreviousUsername:String?) throws -> [String:Any] {
         try validate(repo)
         let entries: [[String: Any]]
         do {
@@ -113,6 +122,8 @@ final class GitHubTeam {
             if let previous = mine?.object["username"] as? String, previous != username, confirmedPreviousUsername != previous {
                 throw AccountRenameConfirmation(previous: previous, current: username)
             }
+            // Hot 100 is cumulative: an older local snapshot must never erase remote completions.
+            let solved = Array(Set(solved).union(mine?.object["solved"] as? [String] ?? [])).sorted()
             if mine == nil || mine?.object["username"] as? String != username || Set(mine?.object["solved"] as? [String] ?? []) != Set(solved) {
                 let object: [String: Any] = ["schemaVersion": 1, "studyPlan": "top-100-liked", "github": login, "username": username, "solved": solved.sorted(), "updated": Date().timeIntervalSince1970]
                 try write(repo, "members/\(login).json", object: object, sha: mine?.sha)
