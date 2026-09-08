@@ -1,19 +1,49 @@
 import Foundation
+import Security
 
 /// Device authorization uses only the public Client ID. No CLI token, secret or private key.
 final class GitHubAppSession: NSObject, URLSessionTaskDelegate {
     static let shared = GitHubAppSession()
     private var token = ""
     private var expires = Date.distantPast
+    private var refreshToken = ""
+    private var refreshExpires = Date.distantPast
+    private var clientID = ""
+    private(set) var sessionSaved = false
+    private let vault = GitHubSessionVault()
+    func restore(clientID: String) -> Bool {
+        guard let value=vault.read(), value.clientID == clientID else {return false}
+        self.clientID=clientID;token=value.token;expires=value.expires
+        refreshToken=value.refreshToken;refreshExpires=value.refreshExpires
+        sessionSaved=true
+        return Date()<expires || (!refreshToken.isEmpty && Date()<refreshExpires)
+    }
+    private func accept(_ response:[String:Any]) throws {
+        guard let access=response["access_token"] as? String,access.hasPrefix("ghu_"),
+              (response["scope"] as? String ?? "").isEmpty else {throw TeamError(message:"GitHub 会话无法续期，请重新登录。",status:401)}
+        token=access;expires=Date().addingTimeInterval(min(28800,response["expires_in"] as? Double ?? 28800))
+        refreshToken=response["refresh_token"] as? String ?? ""
+        refreshExpires=Date().addingTimeInterval(min(15897600,response["refresh_token_expires_in"] as? Double ?? 0))
+        sessionSaved=vault.save(.init(clientID:clientID,token:token,expires:expires,refreshToken:refreshToken,refreshExpires:refreshExpires))
+    }
+    private func renewIfNeeded() throws {
+        guard Date().addingTimeInterval(60)>=expires else {return}
+        guard !refreshToken.isEmpty,Date()<refreshExpires else {throw TeamError(message:"GitHub 登录已过期，请重新登录。",status:401)}
+        let body=try JSONSerialization.data(withJSONObject:["client_id":clientID,"grant_type":"refresh_token","refresh_token":refreshToken])
+        let data=try request(URL(string:"https://github.com/login/oauth/access_token")!,method:"POST",body:body)
+        guard let response=try JSONSerialization.jsonObject(with:data) as? [String:Any] else {throw TeamError(message:"GitHub 续期响应无效")}
+        try accept(response)
+    }
     private lazy var session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-    func logout() { token="";expires = .distantPast }
+    func logout() { token="";expires = .distantPast;refreshToken="";refreshExpires = .distantPast;sessionSaved=false;vault.clear() }
     private func request(_ url:URL, method:String="GET", body:Data?=nil, authenticated:Bool=false) throws -> Data {
         var request=URLRequest(url:url);request.httpMethod=method;request.httpBody=body;request.timeoutInterval=25
         request.setValue("application/json",forHTTPHeaderField:"Accept")
         request.setValue("application/json",forHTTPHeaderField:"Content-Type")
         request.setValue("LeetCode-Team",forHTTPHeaderField:"User-Agent")
         if authenticated {
+            try renewIfNeeded()
             guard !token.isEmpty,Date()<expires else {throw TeamError(message:"请登录 LeetCode-Team 的专用 GitHub App。会话过期后需重新授权。",status:401)}
             request.setValue("Bearer \(token)",forHTTPHeaderField:"Authorization")
         }
@@ -35,6 +65,7 @@ final class GitHubAppSession: NSObject, URLSessionTaskDelegate {
     func login(clientID:String, code:@escaping(String)->Void) throws {
         guard clientID.range(of:"^Iv[0-9A-Za-z_.-]{5,100}$",options:.regularExpression) != nil else {throw TeamError(message:"尚未配置专用 GitHub App 的 Client ID，请先完成项目设置。")}
         logout()
+        self.clientID=clientID
         func post(_ path:String,_ body:[String:String]) throws -> [String:Any] {
             let data=try request(URL(string:"https://github.com/"+path)!,method:"POST",body:JSONSerialization.data(withJSONObject:body))
             guard let object=try JSONSerialization.jsonObject(with:data) as? [String:Any] else {throw TeamError(message:"GitHub 授权响应无效")}
@@ -50,7 +81,7 @@ final class GitHubAppSession: NSObject, URLSessionTaskDelegate {
             let response=try post("login/oauth/access_token",["client_id":clientID,"device_code":deviceCode,"grant_type":"urn:ietf:params:oauth:grant-type:device_code"])
             if let access=response["access_token"] as? String {
                 guard access.hasPrefix("ghu_"),(response["scope"] as? String ?? "").isEmpty else {throw TeamError(message:"拒绝使用通用 OAuth 凭证；需要专用 GitHub App。")}
-                token=access;expires=Date().addingTimeInterval(min(28800,response["expires_in"] as? Double ?? 28800))
+                try accept(response)
                 return
             }
             switch response["error"] as? String {
@@ -97,5 +128,46 @@ final class GitHubAppSession: NSObject, URLSessionTaskDelegate {
             try verifyInstallationBoundary(repository:parts[1]+"/"+parts[2])
         }
         return try request(URL(string:"https://api.github.com/"+endpoint)!,method:input == nil ? "GET":"PUT",body:input,authenticated:true)
+    }
+}
+
+/// Isolated from the legacy LeetSquad credential. Never permits implicit keychain UI.
+struct GitHubSavedSession: Codable {
+    let clientID: String
+    let token: String
+    let expires: Date
+    let refreshToken: String
+    let refreshExpires: Date
+}
+final class GitHubSessionVault {
+    private let service=(Bundle.main.bundleIdentifier ?? "app.leetsquad.mac")+".github-session-v1"
+    private var query:[String:Any] {[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"device-session"]}
+    private func quiet(_ operation:()->OSStatus)->OSStatus {
+        var previous:DarwinBoolean=false
+        guard SecKeychainGetUserInteractionAllowed(&previous)==errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false)==errSecSuccess else {return errSecInteractionNotAllowed}
+        defer {_ = SecKeychainSetUserInteractionAllowed(previous.boolValue)}
+        return operation()
+    }
+    func read()->GitHubSavedSession? {
+        guard !UserDefaults.standard.bool(forKey:service+".disabled") else {return nil}
+        var q=query;q[kSecReturnData as String]=true;q[kSecMatchLimit as String]=kSecMatchLimitOne
+        var result:CFTypeRef?
+        guard quiet({SecItemCopyMatching(q as CFDictionary,&result)})==errSecSuccess,let data=result as? Data else {return nil}
+        return try? JSONDecoder().decode(GitHubSavedSession.self,from:data)
+    }
+    func save(_ value:GitHubSavedSession)->Bool {
+        guard let data=try? JSONEncoder().encode(value) else {return false}
+        var status=quiet {SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)}
+        if status==errSecItemNotFound {
+            var q=query;q[kSecValueData as String]=data
+            status=quiet {SecItemAdd(q as CFDictionary,nil)}
+        }
+        UserDefaults.standard.set(status != errSecSuccess,forKey:service+".disabled")
+        return status==errSecSuccess
+    }
+    func clear() {
+        UserDefaults.standard.set(true,forKey:service+".disabled")
+        _ = quiet {SecItemDelete(query as CFDictionary)}
     }
 }

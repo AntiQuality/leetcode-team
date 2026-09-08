@@ -82,6 +82,15 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         panel.loadFileURL(resource.appendingPathComponent("sidebar.html"),allowingReadAccessTo:resource)
         browser.load(URLRequest(url:homeURL))
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true)
+        if githubConfigured {
+            githubQueue.async {
+                guard GitHubAppSession.shared.restore(clientID:self.githubClientID) else {return}
+                do {
+                    let login=try self.github.identity()
+                    DispatchQueue.main.async {self.githubLogin=login;self.status("已恢复 GitHub 登录");self.refreshTeam(silent:true)}
+                } catch {DispatchQueue.main.async {self.status("GitHub 会话暂不可用，请点击登录重试。")}}
+            }
+        }
         timer = Timer.scheduledTimer(withTimeInterval:60,repeats:true) { [weak self] _ in self?.sync() }
     }
     /// Animate constraints at a fixed sidebar width so text does not reflow during motion.
@@ -234,7 +243,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 }}
                 return try self.github.identity()
             } completion: { login in
-                self.state.removeValue(forKey:"deviceCode");self.githubLogin=login;self.team=nil;self.status("已连接专用 GitHub App · @"+login);self.refreshTeam()
+                self.state.removeValue(forKey:"deviceCode");self.githubLogin=login;self.team=nil;self.status(GitHubAppSession.shared.sessionSaved ? "已登录并安全保存 GitHub 会话 · @"+login : "GitHub 已登录；钥匙串暂不可用，本次会话不会保存。");self.refreshTeam()
+            }
+        case "githubLogout":
+            guard !teamBusy else {return}
+            githubTask {GitHubAppSession.shared.logout()} completion: { _ in
+                self.githubLogin="";self.team=nil;self.status("已退出 GitHub 并清除本机保存的会话")
             }
         case "githubCheck":
             githubTask { try self.github.identity() } completion: { login in
