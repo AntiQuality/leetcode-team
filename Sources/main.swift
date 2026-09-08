@@ -6,6 +6,7 @@ let homeURL = URL(string: "https://leetcode.cn/studyplan/top-100-liked/")!
 
 final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     var window: NSWindow!
+    var refreshAccountAfterNavigation = false
     var panel: SidebarWebView!
     var panelWidth: NSLayoutConstraint!
     var panelLeading: NSLayoutConstraint!
@@ -206,7 +207,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if sidebar.previewing && action != "ready" && action != "toggleSidebar" {toggleSidebar()}
         switch action {
         case "ready": ready=true; emit()
-        case "login": navigate(URL(string:"https://leetcode.cn/accounts/login/")!)
+        case "login":
+            refreshAccountAfterNavigation = true
+            lastSync = nil
+            navigate(URL(string:"https://leetcode.cn/accounts/login/")!)
         case "plan": navigate(homeURL)
         case "toggleSidebar": toggleSidebar()
         case "back": browser.goBack()
@@ -251,7 +255,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         case "repo":
             if let repo=try? GitHubTeam.repoName(repository),let url=URL(string:"https://github.com/"+repo) {NSWorkspace.shared.open(url)}
-        case "invite":
+        case "invite", "removeMember":
+            guard repository.components(separatedBy:"/").first?.lowercased() == githubLogin.lowercased(), !githubLogin.isEmpty else {status("只有房主可以邀请或移除成员。");return}
+            if action == "removeMember" {
+                guard let member=body["member"] as? String, member != githubLogin,
+                      member.range(of:"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$",options:.regularExpression) != nil else {return}
+                status("请在 GitHub 管理页移除 @"+member+"；完成后其仓库访问权限将撤销，历史进度仍保留。")
+            } else {status("请在 GitHub 添加指定账号；每份邀请只能由该账号接受。")}
             if let repo=try? GitHubTeam.repoName(repository),let url=URL(string:"https://github.com/"+repo+"/settings/access") {NSWorkspace.shared.open(url)}
         case "copy":
             guard !repository.isEmpty else {return}
@@ -264,7 +274,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func navigate(_ url:URL) { browser.load(URLRequest(url:url)) }
     func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!) {
-        if webView === browser { status("页面已加载 · 登录后点击同步进度"); if lastSync == nil || Date().timeIntervalSince(lastSync!)>20 { sync() } }
+        if webView === browser { status("页面已加载 · 登录后点击同步进度"); if refreshAccountAfterNavigation || lastSync == nil || Date().timeIntervalSince(lastSync!)>20 { sync() } }
     }
     func webView(_ webView:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error) {
         if (error as NSError).code != NSURLErrorCancelled { status("页面未能加载：\(error.localizedDescription)。可点击重载重试。") }
@@ -295,9 +305,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         const controller = new AbortController(); const timeout = setTimeout(()=>controller.abort(),20000);
         try {
           const csrf = document.cookie.split('; ').find(x=>x.startsWith('csrftoken='));
-          const response = await fetch('/graphql/', {method:'POST',credentials:'same-origin',signal:controller.signal,
+          const response = await fetch('/graphql/', {method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,
             headers:{'Content-Type':'application/json',...(csrf?{'X-CSRFToken':decodeURIComponent(csrf.slice(10))}:{})},
-            body:JSON.stringify({query:'query { userStatus { isSignedIn username userSlug } studyPlanV2Detail(planSlug: "top-100-liked") { planSubGroups { questions { titleSlug status } } } }'})});
+            body:JSON.stringify({query:'query { userStatus { isSignedIn username userSlug realName } studyPlanV2Detail(planSlug: "top-100-liked") { planSubGroups { questions { titleSlug status } } } }'})});
           if (!response.ok) throw Error('力扣返回 HTTP '+response.status);
           const result = await response.json(); if(result.errors) throw Error('力扣接口已变化或暂不可用');
           return result.data;
@@ -309,8 +319,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             case .failure(let e):self.status("同步失败，保留上次进度：\(e.localizedDescription)");self.refreshTeam(silent:true)
             case .success(let value):
                 guard let data=value as? [String:Any],let user=data["userStatus"] as? [String:Any],user["isSignedIn"] as? Bool == true else {
-                    self.state["username"]="";self.state["solved"]=[String]();self.status("尚未登录力扣 · 请在右侧完成登录");self.refreshTeam(silent:true);return
+                    self.state["displayName"]="";self.state["username"]="";self.state["solved"]=[String]();self.status("尚未登录力扣 · 请在右侧完成登录");self.refreshTeam(silent:true);return
                 }
+                let displayName = (user["realName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                self.state["displayName"] = displayName
+                self.refreshAccountAfterNavigation = false
+                self.emit()
                 guard let plan=data["studyPlanV2Detail"] as? [String:Any],let groups=plan["planSubGroups"] as? [[String:Any]] else {self.status("力扣未返回题单状态，保留上次进度");return}
                 let username=(user["userSlug"] as? String) ?? (user["username"] as? String) ?? ""
                 let known=Set(self.questions.compactMap{$0["slug"] as? String})
