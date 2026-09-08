@@ -1,0 +1,6 @@
+LeetCode-Team.app/
+build-cache/
+__pycache__/
+*.pyc
+*.sqlite3*
+.DS_Store
