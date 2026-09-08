@@ -350,20 +350,32 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 self.teamBusy=false;self.state.removeValue(forKey:"deviceCode")
                 switch result {
                 case .success(let value):self.state["teamStatus"]="";completion(value)
-                case .failure(let error):self.state["teamStatus"]=error.localizedDescription;self.status(error.localizedDescription)
+                case .failure(let error):
+                    self.state["teamStatus"]=error.localizedDescription;self.status(error.localizedDescription)
+                    if let rename=error as? AccountRenameConfirmation {
+                        let repo=self.repository, login=self.githubLogin
+                        let alert=NSAlert();alert.messageText="这是同一个力扣账号改名了吗？"
+                        alert.informativeText="已共享标识："+rename.previous+"\n当前标识："+rename.current+"\n\n旧记录没有不可变账号 ID，无法自动区分改名和换号。确认后仅更新你自己的成员记录及当前通过进度，历史版本仍保留在 GitHub。若切换了账号，请取消。"
+                        alert.addButton(withTitle:"是同一账号，更新记录");alert.addButton(withTitle:"取消")
+                        if alert.runModal() == .alertFirstButtonReturn,
+                           self.repository == repo, self.githubLogin == login,
+                           self.state["username"] as? String == rename.current {
+                            self.refreshTeam(confirmedPreviousUsername:rename.previous)
+                        }
+                    }
                 }
                 self.emit()
             }
         }
     }
-    func refreshTeam(silent:Bool=false) {
+    func refreshTeam(silent:Bool=false, confirmedPreviousUsername:String?=nil) {
         guard !githubLogin.isEmpty,!repository.isEmpty,!teamBusy else {return}
         let repo=repository,login=githubLogin,catalog=Set(questions.compactMap{$0["slug"] as? String})
         // Only upload a successfully validated, currently signed-in LeetCode snapshot.
         let progress: [String:Any]? = (!silent && !(state["username"] as? String ?? "").isEmpty) ? ["username":state["username"]!,"solved":state["solved"]!] : nil
         githubTask {
             guard try self.github.identity() == login else {throw TeamError(message:"GitHub 账号已切换，请重新检查连接。")}
-            return try self.github.snapshot(repo,login:login,catalog:catalog,progress:progress)
+            return try self.github.snapshot(repo,login:login,catalog:catalog,progress:progress,confirmedPreviousUsername:confirmedPreviousUsername)
         } completion: { data in
             guard self.repository==repo,self.githubLogin==login else {return}
             self.team=data;self.state["teamStatus"]="已同步 GitHub";self.emit()

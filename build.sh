@@ -19,7 +19,7 @@ rm -f "$APP/Contents/Resources/github-login.command"
 rm -f "$APP/Contents/Resources/server.py"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>LeetCode-Team</string><key>CFBundleIdentifier</key><string>app.leetsquad.mac</string><key>CFBundleName</key><string>LeetCode-Team</string><key>CFBundleDisplayName</key><string>LeetCode-Team</string><key>CFBundleIconFile</key><string>AppIcon-Bright-v3.icns</string><key>CFBundleVersion</key><string>15</string><key>CFBundleShortVersionString</key><string>0.3.4</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>12.0</string><key>NSHighResolutionCapable</key><true/><key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoads</key><true/></dict>
+<key>CFBundleExecutable</key><string>LeetCode-Team</string><key>CFBundleIdentifier</key><string>app.leetsquad.mac</string><key>CFBundleName</key><string>LeetCode-Team</string><key>CFBundleDisplayName</key><string>LeetCode-Team</string><key>CFBundleIconFile</key><string>AppIcon-Bright-v3.icns</string><key>CFBundleVersion</key><string>16</string><key>CFBundleShortVersionString</key><string>0.3.5</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>12.0</string><key>NSHighResolutionCapable</key><true/><key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoads</key><true/></dict>
 </dict></plist>
 PLIST
 codesign --force --deep --sign - "$APP"

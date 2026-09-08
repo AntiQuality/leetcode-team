@@ -36,6 +36,15 @@ import Foundation
         _ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:progress)
         precondition(writes.count == 1,"Unchanged progress must not create a commit")
         rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:["username":"other","solved":[String]()])}
+        let renameProgress:[String:Any] = ["username":"renamed","solved":["two-sum"]]
+        rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:renameProgress,confirmedPreviousUsername:"wrong-old-name")}
+        _ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:renameProgress,confirmedPreviousUsername:"lc")
+        precondition(files["members/alice.json"]?["username"] as? String == "renamed")
+        precondition(writes.count == 2, "Rename must write even when progress is unchanged")
+        _ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:renameProgress)
+        precondition(writes.count == 2)
+        rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:progress,confirmedPreviousUsername:"lc")}
+        files["members/alice.json"]?["username"]="lc";writes.removeLast()
         conflict=true
         rejected {_ = try github.snapshot("host/leetcode-team-sync",login:"alice",catalog:["two-sum"],progress:["username":"lc","solved":[String]()])}
         precondition(writes.count == 1);conflict=false

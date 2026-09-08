@@ -6,6 +6,12 @@ struct TeamError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct AccountRenameConfirmation: LocalizedError {
+    let previous: String
+    let current: String
+    var errorDescription: String? { "力扣主页标识已变化，请确认是否为同一账号改名。" }
+}
+
 /// Repository transport is authenticated exclusively through the dedicated GitHub App.
 final class GitHubTeam {
     typealias Transport = ([String], Data?) throws -> Data
@@ -72,7 +78,7 @@ final class GitHubTeam {
         }
         return repo
     }
-    func snapshot(_ repo: String, login: String, catalog: Set<String>, progress: [String: Any]? = nil) throws -> [String: Any] {
+    func snapshot(_ repo: String, login: String, catalog: Set<String>, progress: [String: Any]? = nil, confirmedPreviousUsername: String? = nil) throws -> [String: Any] {
         try validate(repo)
         let entries: [[String: Any]]
         do {
@@ -104,10 +110,10 @@ final class GitHubTeam {
         }
         if let progress = progress, let username = progress["username"] as? String, !username.isEmpty,
            let solved = progress["solved"] as? [String], Set(solved).isSubset(of: catalog) {
-            if let previous = mine?.object["username"] as? String, previous != username {
-                throw TeamError(message: "当前力扣账号与已共享账号不同，已暂停上传；请切回原力扣账号。")
+            if let previous = mine?.object["username"] as? String, previous != username, confirmedPreviousUsername != previous {
+                throw AccountRenameConfirmation(previous: previous, current: username)
             }
-            if mine == nil || Set(mine?.object["solved"] as? [String] ?? []) != Set(solved) {
+            if mine == nil || mine?.object["username"] as? String != username || Set(mine?.object["solved"] as? [String] ?? []) != Set(solved) {
                 let object: [String: Any] = ["schemaVersion": 1, "studyPlan": "top-100-liked", "github": login, "username": username, "solved": solved.sorted(), "updated": Date().timeIntervalSince1970]
                 try write(repo, "members/\(login).json", object: object, sha: mine?.sha)
                 var member = object; member["id"] = login; member["nickname"] = login
